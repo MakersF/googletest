@@ -420,24 +420,18 @@ std::string FormatForComparisonFailureMessage(
 // We define UniversalPrinter as a class template (as opposed to a
 // function template), as we need to partially specialize it for
 // reference types, which cannot be done with function templates.
+// When PrintTo() is not specialized or overloaded for type T, it
+// prints the given value using the << operator if it has one;
+// otherwise prints the bytes in it
+//
+// A user can override the behavior of UniversalPrinter<T>::Print()
+// for a class type Foo by defining an overload of PrintTo() in the
+// namespace where Foo is defined.  We give the user this option as
+// sometimes defining a << operator for Foo is not desirable (e.g.
+// the coding style may prevent doing it, or there is already a << 
+// operator but it doesn't do what the user wants).
 template <typename T>
 class UniversalPrinter;
-
-// Prints the given value using the << operator if it has one;
-// otherwise prints the bytes in it.  This is what
-// UniversalPrinter<T>::Print() does when PrintTo() is not specialized
-// or overloaded for type T.
-//
-// A user can override this behavior for a class type Foo by defining
-// an overload of PrintTo() in the namespace where Foo is defined.  We
-// give the user this option as sometimes defining a << operator for
-// Foo is not desirable (e.g. the coding style may prevent doing it,
-// or there is already a << operator but it doesn't do what the user
-// wants).
-template <typename T>
-void PrintTo(const T& value, ::std::ostream* os) {
-  internal::PrintWithFallback(value, os);
-}
 
 // The following list of PrintTo() overloads tells
 // UniversalPrinter<T>::Print() how to print standard types (built-in
@@ -690,18 +684,32 @@ class UniversalPrinter {
   // conflicts with ::testing::internal::PrintTo in the body of the
   // function.
   static void Print(const T& value, ::std::ostream* os) {
-    // By default, ::testing::internal::PrintTo() is used for printing
-    // the value.
-    //
-    // Thanks to Koenig look-up, if T is a class and has its own
-    // PrintTo() function defined in its namespace, that function will
-    // be visible here.  Since it is more specific than the generic ones
-    // in ::testing::internal, it will be picked by the compiler in the
-    // following statement - exactly what we want.
-    PrintTo(value, os);
+    // Pass an int as 3rd parameter to trigger the correct priority
+    // in the overload resolution of PrintImpl
+    PrintImpl(value, os, int{});
   }
 
   GTEST_DISABLE_MSC_WARNINGS_POP_()
+ private:
+  // First, check if T has a valid PrintTo() overload.
+  // If it does, use it to print the value.
+  // This function has precedence over the fallback below.
+  template<typename U = T, typename = decltype(PrintTo(::std::declval<const U&>(), ::std::declval<::std::ostream*>()))>
+  static void PrintImpl(const U& value, ::std::ostream* os, int) {
+    // Thanks to Koenig look-up, if T is a class and has its own
+    // PrintTo() function defined in its namespace, that function will
+    // be visible here.
+    PrintTo(value, os);
+  }
+  
+  // If T doesn't have a valid PrintTo(), use the fallback behaviour.
+  // This function has lower precendence than the above one because
+  // PrintImpl is invoked with an int as 3rd parameter, and char requires
+  // a narrowing conversion while int, used in the above function, is a perfect
+  // match.
+  static void PrintImpl(const T& value, ::std::ostream* os, char) {
+    internal::PrintWithFallback(value, os);
+  }
 };
 
 // Remove any const-qualifiers before passing a type to UniversalPrinter.
